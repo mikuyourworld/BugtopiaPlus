@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 目标框架 -->
+    <TargetFramework>net472</TargetFramework>
+    
+    <!-- 输出文件名 -->
+    <AssemblyName>bugtopiaplus</AssemblyName>
+    
+    <!-- 不在输出路径中添加 "net472" 字样，保持路径简洁 -->
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+
+    <!-- 允许使用最新的C#语言功能 -->
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 
+      这里只使用 <Reference> 来引用你 libs 文件夹中的本地 DLL。
+      没有 <PackageReference>，所以 dotnet build 不会去网上下载任何东西。
+    -->
+
+    <!-- 游戏核心程序集 -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>.\\libs\\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Unity 核心模块 -->
+    <Reference Include="UnityEngine">
+      <HintPath>.\\libs\\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>.\\libs\\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>.\\libs\\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    
+    <!-- BepInEx & Harmony 核心库 -->
+    <Reference Include="0Harmony">
+      <HintPath>.\\libs\\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx">
+      <HintPath>.\\libs\\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

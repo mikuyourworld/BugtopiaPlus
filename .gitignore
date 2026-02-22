@@ -1,0 +1,8 @@
+
+bin/
+obj/
+.vs/
+*.txt
+inspect.cs
+inspect.exe
+
