@@ -168,6 +168,26 @@ namespace BugtopiaPlus
                             // 绕过 IsFull 检测，强制将新的宝宝虫转入目标箱子
                             newIdleObject.transform.SetParent(targetBox.transform);
                             
+                            // 通知繁育箱这枚蛋已经离箱，必须调用 GeneratePreEgg 重新启动繁育循环
+                            var mateBox = oldIdleObject.GetMateBox();
+                            if (mateBox != null && DataManager.instance != null && DataManager.instance.mateBoxController != null)
+                            {
+                                // 清理繁育箱里残留的已被销毁的老蛋的引用
+                                mateBox.RemoveIdleReference(oldIdleObject);
+
+                                // 触发重新生蛋的逻辑
+                                var generatePreEggMethod = Traverse.Create(DataManager.instance.mateBoxController).Method("GeneratePreEgg", mateBox);
+                                if (generatePreEggMethod.MethodExists())
+                                {
+                                    generatePreEggMethod.GetValue();
+                                    Plugin.Log.LogInfo("[AutoTransfer] Triggered GeneratePreEgg to resume breeding.");
+                                }
+                                else
+                                {
+                                    Plugin.Log.LogError("[AutoTransfer] Failed to find GeneratePreEgg method.");
+                                }
+                            }
+
                             // 触发游戏内部的消息系统，告知有虫子移动过了，以便 UI 或其他系统刷新状态
                             // 使用反射调用 com.ootii.Messages.MessageDispatcher.SendMessage
                             var msgDispatcherType = System.Type.GetType("com.ootii.Messages.MessageDispatcher, Assembly-CSharp");
