@@ -42,7 +42,7 @@ namespace BugtopiaPlus
 
             // 应用补丁
             Harmony.CreateAndPatchAll(typeof(UnifiedPatches));
-            Log.LogInfo("BugtopiaPlus loaded successfully with Config support!");
+            Log.LogInfo("[AutoTransfer] BugtopiaPlus loaded successfully with Config support!");
         }
 
         private void Update()
@@ -55,9 +55,123 @@ namespace BugtopiaPlus
     // 将所有补丁整合到一个类中，显得更整洁
     public static class UnifiedPatches
     {
-        // ----------------------------------------------------
-        // 1. 解除不可喂食限制 (例如喂蛹)
-        // ----------------------------------------------------
+        [HarmonyPatch(typeof(Peecub.UIModalPanel), "Close")]
+        [HarmonyPostfix]
+        public static void UIModalPanel_Close_Postfix()
+        {
+            if (Plugin.EnableAutoTransfer.Value && Plugin.Instance != null)
+            {
+                Plugin.Instance.StartCoroutine(CheckOfflineHatchesDelayed());
+            }
+        }
+
+        private static System.Collections.IEnumerator CheckOfflineHatchesDelayed()
+        {
+            // 等待半秒钟让关闭动画完成
+            yield return new UnityEngine.WaitForSeconds(0.5f);
+            Plugin.Log.LogInfo("[AutoTransfer] Delay finished. Scanning MateBoxes.");
+
+            if (DataManager.instance == null || DataManager.instance.mateBoxController == null || DataManager.instance.boxes == null)
+            {
+                Plugin.Log.LogWarning("[AutoTransfer] DataManager components are null. Aborting.");
+                yield break;
+            }
+
+            int targetIndex = Plugin.TargetHabitatBoxIndex.Value;
+            if (targetIndex < 0 || targetIndex >= DataManager.instance.boxes.Count)
+            {
+                Plugin.Log.LogWarning($"[AutoTransfer] Target index {targetIndex} is invalid. Aborting.");
+                yield break;
+            }
+
+            var targetBox = DataManager.instance.boxes[targetIndex];
+            if (targetBox == null || targetBox.transform == null)
+            {
+                Plugin.Log.LogWarning("[AutoTransfer] Target box is null. Aborting.");
+                yield break;
+            }
+
+            foreach (var mateBox in DataManager.instance.mateBoxController.mateBoxes)
+            {
+                if (mateBox == null || mateBox.transform == null) continue;
+
+                var mateBoxTraverse = Traverse.Create(mateBox);
+                var firstIdle = mateBoxTraverse.Property("FirstIdle").GetValue<IdleObject>() ?? mateBoxTraverse.Field("firstIdle").GetValue<IdleObject>();
+                var secondIdle = mateBoxTraverse.Property("SecondIdle").GetValue<IdleObject>() ?? mateBoxTraverse.Field("secondIdle").GetValue<IdleObject>();
+                var eggIdle = mateBoxTraverse.Property("EggIdle").GetValue<IdleObject>() ?? mateBoxTraverse.Field("eggIdle").GetValue<IdleObject>();
+
+                Plugin.Log.LogInfo($"[AutoTransfer] Scanning MateBox {mateBox.name}. Children count: {mateBox.transform.childCount}. FirstIdle={(firstIdle != null ? firstIdle.GetBioName() : "null")}, SecondIdle={(secondIdle != null ? secondIdle.GetBioName() : "null")}, EggIdle={(eggIdle != null ? eggIdle.GetBioName() : "null")}");
+
+                var validBabies = new System.Collections.Generic.List<IdleObject>();
+                var corruptedBabies = new System.Collections.Generic.List<IdleObject>();
+
+                // 第一步：安全收集所有子节点，防止枚举过程中修改 Transform 导致 InvalidOperationException
+                foreach (UnityEngine.Transform child in mateBox.transform)
+                {
+                    var bug = child.GetComponent<IdleObject>();
+                    if (bug != null && bug != firstIdle && bug != secondIdle)
+                    {
+                        // 正常的繁育箱应该最多只有一个未长大的蛋或幼虫
+                        if (validBabies.Count == 0 && (int)bug.growthStage >= 0)
+                        {
+                            validBabies.Add(bug);
+                        }
+                        else
+                        {
+                            // 发现多余的（由之前无限生成Bug导致的复制体），将其视为脏数据直接清理
+                            corruptedBabies.Add(bug);
+                        }
+                    }
+                }
+
+                // 第二步：清理脏数据
+                foreach (var corruptedBug in corruptedBabies)
+                {
+                    Plugin.Log.LogWarning($"[AutoTransfer] Destroying corrupted duplicated bug {corruptedBug.GetBioName()} from MateBox!");
+                    UnityEngine.Object.Destroy(corruptedBug.gameObject);
+                }
+
+                if (corruptedBabies.Count > 0)
+                {
+                    // 如果存在脏数据，强制游戏更新一次 eggIdle 引用，防止空引用或指向已被销毁的对象
+                    var updateEggIdleMethod = mateBoxTraverse.Method("UpdateEggIdle");
+                    if (updateEggIdleMethod.MethodExists()) updateEggIdleMethod.GetValue();
+                }
+
+                // 第三步：处理合法的离线孵化虫系
+                if (validBabies.Count > 0)
+                {
+                    var validBug = validBabies[0];
+                    if ((int)validBug.growthStage > 0 && (int)validBug.growthStage < 4)
+                    {
+                        Plugin.Log.LogInfo($"[AutoTransfer] Found offline-hatched bug {validBug.GetBioName()}. Moving to TargetBox.");
+                        
+                        validBug.transform.SetParent(targetBox.transform);
+
+                        var generatePreEggMethod = mateBoxTraverse.Method("GeneratePreEgg", mateBox);
+                        if (!generatePreEggMethod.MethodExists()) 
+                        {
+                            generatePreEggMethod = Traverse.Create(DataManager.instance.mateBoxController).Method("GeneratePreEgg", mateBox);
+                        }
+                        
+                        if (generatePreEggMethod.MethodExists())
+                        {
+                            generatePreEggMethod.GetValue();
+                        }
+
+                        var msgDispatcherType = System.Type.GetType("com.ootii.Messages.MessageDispatcher, Assembly-CSharp");
+                        if (msgDispatcherType != null)
+                        {
+                            var sendMsgMethod = msgDispatcherType.GetMethod("SendMessage", new System.Type[] { typeof(string), typeof(float) });
+                            if (sendMsgMethod != null)
+                            {
+                                sendMsgMethod.Invoke(null, new object[] { "OnIdleObjectMoved", 0f });
+                            }
+                        }
+                    }
+                }
+            }
+        }
         [HarmonyPatch(typeof(IdleObject), "TryFeed")]
         [HarmonyPrefix]
         public static bool TryFeed_Prefix(IdleObject __instance, ref bool __result)
@@ -155,64 +269,63 @@ namespace BugtopiaPlus
             // GrowthStage 0 对应于“卵”
             if (oldIdleObject.IsInMateBox() && (int)oldIdleObject.growthStage == 0)
             {
-                int targetIndex = Plugin.TargetHabitatBoxIndex.Value;
-                if (DataManager.instance != null && DataManager.instance.boxes != null)
+                try
                 {
-                    if (targetIndex >= 0 && targetIndex < DataManager.instance.boxes.Count)
+                    int targetIndex = Plugin.TargetHabitatBoxIndex.Value;
+                    if (DataManager.instance != null && DataManager.instance.boxes != null)
                     {
-                        var targetBox = DataManager.instance.boxes[targetIndex];
-                        if (targetBox != null && targetBox.transform != null)
+                        if (targetIndex >= 0 && targetIndex < DataManager.instance.boxes.Count)
                         {
-                            Plugin.Log.LogInfo($"[AutoTransfer] Moving hatched bug {newIdleObject.GetBioName()} to Box {targetIndex}");
-                            
-                            // 绕过 IsFull 检测，强制将新的宝宝虫转入目标箱子
-                            newIdleObject.transform.SetParent(targetBox.transform);
-                            
-                            // 通知繁育箱这枚蛋已经离箱，必须调用 GeneratePreEgg 重新启动繁育循环
-                            var mateBox = oldIdleObject.GetMateBox();
-                            if (mateBox != null && DataManager.instance != null && DataManager.instance.mateBoxController != null)
+                            var targetBox = DataManager.instance.boxes[targetIndex];
+                            if (targetBox != null && targetBox.transform != null)
                             {
-                                // 清理繁育箱里残留的已被销毁的老蛋的引用
-                                mateBox.RemoveIdleReference(oldIdleObject);
+                                Plugin.Log.LogInfo($"[AutoTransfer] Moving hatched bug {newIdleObject.GetBioName()} to Box {targetIndex}");
+                                
+                                // 绕过 IsFull 检测，强制将新的宝宝虫转入目标箱子
+                                newIdleObject.transform.SetParent(targetBox.transform);
+                                
+                                // 通知繁育箱这枚蛋已经离箱，必须调用 GeneratePreEgg 重新启动繁育循环
+                                var mateBox = oldIdleObject.GetMateBox();
+                                if (mateBox != null && DataManager.instance != null && DataManager.instance.mateBoxController != null)
+                                {
+                                    // 防止 RemoveIdleReference 抛出空引用异常（如果 mateBox.eggIdle 等于 null）
+                                    // 遇到异常会中断 Harmony Postfix，导致游戏原逻辑 Object.Destroy(oldIdleObject) 被跳过，从而产生无限复制虫子的恶性Bug！
+                                    var eggIdle = Traverse.Create(mateBox).Property("EggIdle").GetValue<IdleObject>() ?? Traverse.Create(mateBox).Field("eggIdle").GetValue<IdleObject>();
+                                    if (eggIdle != null)
+                                    {
+                                        mateBox.RemoveIdleReference(oldIdleObject);
+                                    }
 
-                                // 触发重新生蛋的逻辑
-                                var generatePreEggMethod = Traverse.Create(DataManager.instance.mateBoxController).Method("GeneratePreEgg", mateBox);
-                                if (generatePreEggMethod.MethodExists())
-                                {
-                                    generatePreEggMethod.GetValue();
-                                    Plugin.Log.LogInfo("[AutoTransfer] Triggered GeneratePreEgg to resume breeding.");
+                                    // 触发重新生蛋的逻辑
+                                    var generatePreEggMethod = Traverse.Create(DataManager.instance.mateBoxController).Method("GeneratePreEgg", mateBox);
+                                    if (generatePreEggMethod.MethodExists())
+                                    {
+                                        generatePreEggMethod.GetValue();
+                                        Plugin.Log.LogInfo("[AutoTransfer] Triggered GeneratePreEgg to resume breeding.");
+                                    }
                                 }
-                                else
-                                {
-                                    Plugin.Log.LogError("[AutoTransfer] Failed to find GeneratePreEgg method.");
-                                }
-                            }
 
-                            // 触发游戏内部的消息系统，告知有虫子移动过了，以便 UI 或其他系统刷新状态
-                            // 使用反射调用 com.ootii.Messages.MessageDispatcher.SendMessage
-                            var msgDispatcherType = System.Type.GetType("com.ootii.Messages.MessageDispatcher, Assembly-CSharp");
-                            if (msgDispatcherType != null)
-                            {
-                                var sendMsgMethod = msgDispatcherType.GetMethod("SendMessage", new System.Type[] { typeof(string), typeof(float) });
-                                if (sendMsgMethod != null)
+                                // 触发游戏内部的消息系统，告知有虫子移动过了，以便 UI 或其他系统刷新状态
+                                var msgDispatcherType = System.Type.GetType("com.ootii.Messages.MessageDispatcher, Assembly-CSharp");
+                                if (msgDispatcherType != null)
                                 {
-                                    sendMsgMethod.Invoke(null, new object[] { "OnIdleObjectMoved", 0f });
+                                    var sendMsgMethod = msgDispatcherType.GetMethod("SendMessage", new System.Type[] { typeof(string), typeof(float) });
+                                    if (sendMsgMethod != null)
+                                    {
+                                        sendMsgMethod.Invoke(null, new object[] { "OnIdleObjectMoved", 0f });
+                                    }
                                 }
-                                else
-                                {
-                                    Plugin.Log.LogError("[AutoTransfer] Failed to find SendMessage method.");
-                                }
-                            }
-                            else
-                            {
-                                Plugin.Log.LogError("[AutoTransfer] Failed to find MessageDispatcher type.");
                             }
                         }
+                        else
+                        {
+                            Plugin.Log.LogWarning($"[AutoTransfer] Target box index {targetIndex} is out of bounds!");
+                        }
                     }
-                    else
-                    {
-                        Plugin.Log.LogWarning($"[AutoTransfer] Target box index {targetIndex} is out of bounds!");
-                    }
+                }
+                catch (System.Exception ex)
+                {
+                    Plugin.Log.LogError($"[AutoTransfer] CRITICAL ERROR during OnUpgradeRefresh: {ex.Message}\n{ex.StackTrace}");
                 }
             }
         }
@@ -332,5 +445,101 @@ namespace BugtopiaPlus
             // 加上 colorType 来区分亚种 (稀有度)
             return $"{baseId}_{(int)bug.colorType}";
         }
+    [HarmonyPatch(typeof(Peecub.UITitle), "OnClick")]
+    [HarmonyPostfix]
+    public static void UITitle_OnClick_Postfix()
+    {
+        if (Plugin.EnableAutoTransfer.Value && Plugin.Instance != null)
+        {
+            Plugin.Log.LogInfo("[AutoTransfer] UITitle_OnClick hooked. Starting delayed scan logic.");
+            Plugin.Instance.StartCoroutine(CheckOfflineHatchesDelayed());
+        }
     }
+
+    private static System.Collections.IEnumerator CheckOfflineHatchesDelayed()
+    {
+        Plugin.Log.LogInfo("[AutoTransfer] CheckOfflineHatchesDelayed started, waiting 1 second...");
+        yield return new UnityEngine.WaitForSeconds(1.0f);
+        Plugin.Log.LogInfo("[AutoTransfer] Delay finished. Scanning MateBoxes.");
+
+        if (DataManager.instance == null || DataManager.instance.mateBoxController == null || DataManager.instance.boxes == null)
+        {
+            Plugin.Log.LogWarning("[AutoTransfer] DataManager components are null. Aborting.");
+            yield break;
+        }
+
+        int targetIndex = Plugin.TargetHabitatBoxIndex.Value;
+        if (targetIndex < 0 || targetIndex >= DataManager.instance.boxes.Count)
+        {
+            Plugin.Log.LogWarning($"[AutoTransfer] Target index {targetIndex} is invalid. Aborting.");
+            yield break;
+        }
+
+        var targetBox = DataManager.instance.boxes[targetIndex];
+        if (targetBox == null || targetBox.transform == null)
+        {
+            Plugin.Log.LogWarning("[AutoTransfer] Target box is null. Aborting.");
+            yield break;
+        }
+
+        foreach (var mateBox in DataManager.instance.mateBoxController.mateBoxes)
+        {
+            if (mateBox == null || mateBox.transform == null) continue;
+
+            var mateBoxTraverse = Traverse.Create(mateBox);
+            var firstIdle = mateBoxTraverse.Property("FirstIdle").GetValue<IdleObject>() ?? mateBoxTraverse.Field("firstIdle").GetValue<IdleObject>();
+            var secondIdle = mateBoxTraverse.Property("SecondIdle").GetValue<IdleObject>() ?? mateBoxTraverse.Field("secondIdle").GetValue<IdleObject>();
+            var eggIdle = mateBoxTraverse.Property("EggIdle").GetValue<IdleObject>() ?? mateBoxTraverse.Field("eggIdle").GetValue<IdleObject>();
+
+            Plugin.Log.LogInfo($"[AutoTransfer] Scanning MateBox {mateBox.name}. Children count: {mateBox.transform.childCount}. FirstIdle={(firstIdle != null ? firstIdle.GetBioName() : "null")}, SecondIdle={(secondIdle != null ? secondIdle.GetBioName() : "null")}, EggIdle={(eggIdle != null ? eggIdle.GetBioName() : "null")}");
+
+            foreach (UnityEngine.Transform child in mateBox.transform)
+            {
+                var bug = child.GetComponent<IdleObject>();
+                if (bug != null)
+                {
+                    Plugin.Log.LogInfo($"[AutoTransfer] Found child: {bug.GetBioName()} - Stage: {bug.growthStage} - IsFirst: {bug == firstIdle} - IsSecond: {bug == secondIdle}");
+                    
+                    if (bug != firstIdle && bug != secondIdle)
+                    {
+                        if ((int)bug.growthStage > 0 && (int)bug.growthStage < 4)
+                        {
+                            Plugin.Log.LogInfo($"[AutoTransfer] ^^^ THIS BUG WILL BE TRANSFERRED ^^^");
+                            
+                            mateBox.RemoveIdleReference(bug);
+                            bug.transform.SetParent(targetBox.transform);
+
+                            var generatePreEggMethod = mateBoxTraverse.Method("GeneratePreEgg", mateBox);
+                            if (!generatePreEggMethod.MethodExists()) 
+                            {
+                                generatePreEggMethod = Traverse.Create(DataManager.instance.mateBoxController).Method("GeneratePreEgg", mateBox);
+                            }
+                            
+                            if (generatePreEggMethod.MethodExists())
+                            {
+                                generatePreEggMethod.GetValue();
+                                Plugin.Log.LogInfo("[AutoTransfer] Triggered GeneratePreEgg for offline hatch.");
+                            }
+
+                            var msgDispatcherType = System.Type.GetType("com.ootii.Messages.MessageDispatcher, Assembly-CSharp");
+                            if (msgDispatcherType != null)
+                            {
+                                var sendMsgMethod = msgDispatcherType.GetMethod("SendMessage", new System.Type[] { typeof(string), typeof(float) });
+                                if (sendMsgMethod != null)
+                                {
+                                    sendMsgMethod.Invoke(null, new object[] { "OnIdleObjectMoved", 0f });
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    Plugin.Log.LogInfo($"[AutoTransfer] Found child WITHOUT IdleObject: {child.name}");
+                }
+            }
+        }
+        Plugin.Log.LogInfo("[AutoTransfer] Scan complete.");
+    }
+}
 }
