@@ -14,11 +14,13 @@
 
 *(注：系统会自动根据虫虫的品种和星级稀有度/颜色配对来独立判断最大尺寸，让你每一只不同配色的虫虫都有机会带上专属的极限烙印！)*
 
+✅ **繁育箱全自动转移**： 当繁育箱中的虫卵孵化成幼虫后，插件会自动将这些幼虫**无视栖息地容量限制**强行塞入你指定的栖息地箱子！告别繁琐的手动整理，只需坐等满箱极品宝宝。
+
 **【安装指南】**
 
 1.  **安装 BepInEx**： 如果你是第一次使用 Mod，请先从 [BepInEx的GitHub发布页](https://github.com/BepInEx/BepInEx/releases) 下载最新版本的 BepInEx。
 2.  **解压**： 将压缩包内的所有文件，解压到《虫虫生态箱》的游戏根目录 (也就是与 `Bugtopia.exe` 文件放在一起)。
-3.  **安装本 Mod**： [下载 BugtopiaPlus.dll](https://github.com/ mikuyourworld /BugtopiaPlus/releases)。
+3.  **安装本 Mod**： [下载 BugtopiaPlus.dll](https://github.com/mikuyourworld/BugtopiaPlus/releases)。
 4.  **放入插件文件夹**： 将 `BugtopiaPlus.dll` 文件，放入游戏根目录下的 `BepInEx/plugins` 文件夹内。(如果 plugins 文件夹不存在，请先运行一次游戏，它会自动生成)。
 5.  **完成！** 启动游戏即可享受！
 
@@ -28,6 +30,8 @@
 2.  进入 `BepInEx/config` 文件夹。
 3.  找到名为 `BugtopiaPlus.cfg` 的文件，用记事本打开。
 4.  修改对应选项（例如 `EnableUnrestrictedFeeding` 开关）。
+    - `EnableAutoTransfer`: 开启自动转移繁育箱幼虫 (默认 true)。
+    - `TargetHabitatBoxIndex`: 幼虫自动转移的目标栖息地箱子 ID (0代表第一个箱子，依次类推，默认 0)。
 
 **【注意事项】**
 

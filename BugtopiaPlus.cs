@@ -14,6 +14,8 @@ namespace BugtopiaPlus
 
         // --- 定义配置项 (Config Entries) ---
         public static ConfigEntry<bool> EnableUnrestrictedFeeding;
+        public static ConfigEntry<bool> EnableAutoTransfer;
+        public static ConfigEntry<int> TargetHabitatBoxIndex;
 
         private void Awake()
         {
@@ -27,6 +29,16 @@ namespace BugtopiaPlus
                 "EnableUnrestrictedFeeding", 
                 true, 
                 "为true时，你可以在虫虫为蛹阶段时喂食。");
+
+            EnableAutoTransfer = Config.Bind("Toggles",
+                "EnableAutoTransfer",
+                true,
+                "为true时，繁育箱孵化出的幼虫将自动转移到指定的栖息地箱子。");
+
+            TargetHabitatBoxIndex = Config.Bind("Settings",
+                "TargetHabitatBoxIndex",
+                0, // 默认为第一个箱子
+                "设置自动转移目标栖息地箱子的索引（0表示第一个箱子，依次类推）。");
 
             // 应用补丁
             Harmony.CreateAndPatchAll(typeof(UnifiedPatches));
@@ -123,10 +135,65 @@ namespace BugtopiaPlus
             UnityEngine.Component clonedTextComp = maxLabelObj.GetComponent(sizeTextComp.GetType());
             if (clonedTextComp != null)
             {
-                // 浅色背景下，当前最大用鲜艳的天蓝，历史最大用醒目的橙红
                 string colorHex = isHistorical ? "#FF4500" : "#00BFFF";
                 string labelStr = isHistorical ? "MAXX" : "MAX";
                 Traverse.Create(clonedTextComp).Property("text").SetValue($"<color={colorHex}><b>{labelStr}</b></color>");
+            }
+        }
+
+        // ----------------------------------------------------
+        // 4. 野外繁育箱自动转移刚孵化的幼虫
+        // ----------------------------------------------------
+        [HarmonyPatch(typeof(Peecub.LevelManager), "OnUpgradeRefresh")]
+        [HarmonyPostfix]
+        public static void LevelManager_OnUpgradeRefresh_Postfix(Peecub.LevelManager __instance, IdleObject oldIdleObject, IdleObject newIdleObject)
+        {
+            if (!Plugin.EnableAutoTransfer.Value) return;
+            if (oldIdleObject == null || newIdleObject == null) return;
+
+            // 检查老虫子是否在繁殖箱，且是否是刚从蛋孵化出来
+            // GrowthStage 0 对应于“卵”
+            if (oldIdleObject.IsInMateBox() && (int)oldIdleObject.growthStage == 0)
+            {
+                int targetIndex = Plugin.TargetHabitatBoxIndex.Value;
+                if (DataManager.instance != null && DataManager.instance.boxes != null)
+                {
+                    if (targetIndex >= 0 && targetIndex < DataManager.instance.boxes.Count)
+                    {
+                        var targetBox = DataManager.instance.boxes[targetIndex];
+                        if (targetBox != null && targetBox.transform != null)
+                        {
+                            Plugin.Log.LogInfo($"[AutoTransfer] Moving hatched bug {newIdleObject.GetBioName()} to Box {targetIndex}");
+                            
+                            // 绕过 IsFull 检测，强制将新的宝宝虫转入目标箱子
+                            newIdleObject.transform.SetParent(targetBox.transform);
+                            
+                            // 触发游戏内部的消息系统，告知有虫子移动过了，以便 UI 或其他系统刷新状态
+                            // 使用反射调用 com.ootii.Messages.MessageDispatcher.SendMessage
+                            var msgDispatcherType = System.Type.GetType("com.ootii.Messages.MessageDispatcher, Assembly-CSharp");
+                            if (msgDispatcherType != null)
+                            {
+                                var sendMsgMethod = msgDispatcherType.GetMethod("SendMessage", new System.Type[] { typeof(string), typeof(float) });
+                                if (sendMsgMethod != null)
+                                {
+                                    sendMsgMethod.Invoke(null, new object[] { "OnIdleObjectMoved", 0f });
+                                }
+                                else
+                                {
+                                    Plugin.Log.LogError("[AutoTransfer] Failed to find SendMessage method.");
+                                }
+                            }
+                            else
+                            {
+                                Plugin.Log.LogError("[AutoTransfer] Failed to find MessageDispatcher type.");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        Plugin.Log.LogWarning($"[AutoTransfer] Target box index {targetIndex} is out of bounds!");
+                    }
+                }
             }
         }
     }
