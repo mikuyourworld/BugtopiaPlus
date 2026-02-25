@@ -3,6 +3,7 @@ using BepInEx.Configuration; // 引入配置系统命名空间
 using BepInEx.Logging;
 using HarmonyLib;
 using Peecub; // 游戏原本的命名空间
+using TMPro; // TMP 文本组件命名空间
 
 namespace BugtopiaPlus
 {
@@ -16,6 +17,7 @@ namespace BugtopiaPlus
         public static ConfigEntry<bool> EnableUnrestrictedFeeding;
         public static ConfigEntry<bool> EnableAutoTransfer;
         public static ConfigEntry<int> TargetHabitatBoxIndex;
+        public static ConfigEntry<int> MaxHabitatBoxCapacity;
 
         private void Awake()
         {
@@ -40,10 +42,16 @@ namespace BugtopiaPlus
                 0, // 默认为第一个箱子
                 "设置自动转移目标栖息地箱子的索引（0表示第一个箱子，依次类推）。");
 
+            MaxHabitatBoxCapacity = Config.Bind("Settings",
+                "MaxHabitatBoxCapacity",
+                40, // 默认为游戏原本满级的 40
+                "设置最大级别生态箱的容量上限（默认为满级40，可自由上调或下调）。");
+
             // 应用补丁
             Harmony.CreateAndPatchAll(typeof(UnifiedPatches));
             Harmony.CreateAndPatchAll(typeof(LandscapeScalePatch));
             Harmony.CreateAndPatchAll(typeof(UISpecialModalPanelPatch));
+            Harmony.CreateAndPatchAll(typeof(MaxCapacityPatch));
             Log.LogInfo("[AutoTransfer] BugtopiaPlus loaded successfully with Config support!");
         }
 
@@ -612,9 +620,61 @@ namespace BugtopiaPlus
         public static void Initialize(string message, ref bool showCancelButton)
         {
             // 如果是退出造景的弹窗，强制显示“不保存”按钮，无视原版的隐藏逻辑
-            if (message != null && message.Contains("UIModalPanel_Landscape") || message.Contains("造景"))
+            if (message != null && (message.Contains("UIModalPanel_Landscape") || message.Contains("造景")))
             {
                 showCancelButton = true;
+            }
+        }
+    }
+
+    // --- 可配置大箱子容量限制补丁 ---
+    [HarmonyPatch]
+    public static class MaxCapacityPatch
+    {
+        // 拦截 BoxData.IsFull 方法
+        [HarmonyPatch(typeof(Peecub.BoxData), "IsFull")]
+        [HarmonyPrefix]
+        public static bool Prefix_IsFull(Peecub.BoxData __instance, ref bool __result)
+        {
+            if (__instance.capacity >= 40)
+            {
+                // 如果是满级箱子（游戏原定40），应用 Config 里的容量
+                __result = __instance.GetCount() >= Plugin.MaxHabitatBoxCapacity.Value;
+                return false; // 拦截原方法
+            }
+            return true; // 保持原方法
+        }
+
+        // 拦截 BoxData.IsFullByCard 方法
+        [HarmonyPatch(typeof(Peecub.BoxData), "IsFullByCard")]
+        [HarmonyPrefix]
+        public static bool Prefix_IsFullByCard(Peecub.BoxData __instance, ref bool __result)
+        {
+            if (__instance.capacity >= 40)
+            {
+                int totalCount = __instance.GetCount() + Peecub.RM.instance.cardInsectCount;
+                __result = totalCount > Plugin.MaxHabitatBoxCapacity.Value;
+                return false; // 拦截原方法
+            }
+            return true; // 保持原方法
+        }
+
+        // 拦截 UIHud.UpdateCapacity 方法，修正 UI 上的文字显示
+        [HarmonyPatch(typeof(Peecub.UIHud), "UpdateCapacity")]
+        [HarmonyPostfix]
+        public static void Postfix_UpdateCapacity(Peecub.UIHud __instance)
+        {
+            if (Peecub.DataManager.instance == null) return;
+            Peecub.BoxData activeBox = Peecub.DataManager.instance.GetActiveBox();
+            if (activeBox != null && activeBox.capacity >= 40)
+            {
+                // 用反射获取私有字段 capacityText
+                var capacityText = Traverse.Create(__instance).Field("capacityText").GetValue<TMPro.TextMeshProUGUI>();
+                if (capacityText != null)
+                {
+                    int currentCount = activeBox.GetCount();
+                    capacityText.text = currentCount.ToString() + "/" + Plugin.MaxHabitatBoxCapacity.Value.ToString();
+                }
             }
         }
     }
