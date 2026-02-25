@@ -42,6 +42,8 @@ namespace BugtopiaPlus
 
             // 应用补丁
             Harmony.CreateAndPatchAll(typeof(UnifiedPatches));
+            Harmony.CreateAndPatchAll(typeof(LandscapeScalePatch));
+            Harmony.CreateAndPatchAll(typeof(UISpecialModalPanelPatch));
             Log.LogInfo("[AutoTransfer] BugtopiaPlus loaded successfully with Config support!");
         }
 
@@ -542,4 +544,78 @@ namespace BugtopiaPlus
         Plugin.Log.LogInfo("[AutoTransfer] Scan complete.");
     }
 }
+
+    [HarmonyPatch(typeof(Peecub.UIPositionTools))]
+    public class LandscapeScalePatch
+    {
+        [HarmonyPatch("Update")]
+        [HarmonyPostfix]
+        public static void Update(Peecub.UIPositionTools __instance)
+        {
+            if (__instance.target2DObject != null)
+            {
+                float scroll = UnityEngine.Input.mouseScrollDelta.y;
+                bool shrink = UnityEngine.Input.GetKeyDown(UnityEngine.KeyCode.LeftBracket) || UnityEngine.Input.GetKeyDown(UnityEngine.KeyCode.Minus);
+                bool enlarge = UnityEngine.Input.GetKeyDown(UnityEngine.KeyCode.RightBracket) || UnityEngine.Input.GetKeyDown(UnityEngine.KeyCode.Equals);
+                bool resetScale = UnityEngine.Input.GetMouseButtonDown(2) || UnityEngine.Input.GetKeyDown(UnityEngine.KeyCode.R); // 中键或R键还原默认缩放
+
+                if (resetScale)
+                {
+                    UnityEngine.Vector3 currentScale = __instance.target2DObject.localScale;
+                    float signX = UnityEngine.Mathf.Sign(currentScale.x);
+                    float signY = UnityEngine.Mathf.Sign(currentScale.y);
+                    float signZ = UnityEngine.Mathf.Sign(currentScale.z);
+                    __instance.target2DObject.localScale = new UnityEngine.Vector3(1f * signX, 1f * signY, 1f * signZ);
+                    
+                    if (Peecub.DataManager.instance != null)
+                        Peecub.DataManager.instance.isLandscapeEditSaved = false;
+                    return;
+                }
+
+                float scaleFactor = 1f;
+                if (scroll > 0f || enlarge) scaleFactor = 1.05f;
+                else if (scroll < 0f || shrink) scaleFactor = 0.95f;
+
+                if (scaleFactor != 1f)
+                {
+                    UnityEngine.Vector3 currentScale = __instance.target2DObject.localScale;
+                    
+                    float signX = UnityEngine.Mathf.Sign(currentScale.x);
+                    float signY = UnityEngine.Mathf.Sign(currentScale.y);
+                    float signZ = UnityEngine.Mathf.Sign(currentScale.z);
+
+                    float absX = UnityEngine.Mathf.Abs(currentScale.x) * scaleFactor;
+                    float absY = UnityEngine.Mathf.Abs(currentScale.y) * scaleFactor;
+                    float absZ = UnityEngine.Mathf.Abs(currentScale.z) * scaleFactor;
+
+                    absX = UnityEngine.Mathf.Clamp(absX, 0.2f, 10f);
+                    absY = UnityEngine.Mathf.Clamp(absY, 0.2f, 10f);
+                    absZ = UnityEngine.Mathf.Clamp(absZ, 0.2f, 10f);
+
+                    __instance.target2DObject.localScale = new UnityEngine.Vector3(absX * signX, absY * signY, absZ * signZ);
+                    
+                    if (Peecub.DataManager.instance != null)
+                    {
+                        Peecub.DataManager.instance.isLandscapeEditSaved = true; // 设置为 true 避免隐藏“不保存”按钮
+                        // 游戏原版若 isLandscapeEditSaved 为 false，则弹出的框只会有一个确认保存按钮，隐藏不保存按钮。
+                    }
+                }
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(Peecub.UISpecialModalPanel))]
+    public class UISpecialModalPanelPatch
+    {
+        [HarmonyPatch("Initialize")]
+        [HarmonyPrefix]
+        public static void Initialize(string message, ref bool showCancelButton)
+        {
+            // 如果是退出造景的弹窗，强制显示“不保存”按钮，无视原版的隐藏逻辑
+            if (message != null && message.Contains("UIModalPanel_Landscape") || message.Contains("造景"))
+            {
+                showCancelButton = true;
+            }
+        }
+    }
 }
